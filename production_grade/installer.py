@@ -150,26 +150,33 @@ def _install_into_workspace(
 
 # ─── v0.2 dispatch preamble (orchestrator only) ────────────────────────────
 
-_PREAMBLE_MARKER = "v0.2 — Specialist Dispatch Protocol"
+_PREAMBLE_MARKER = "BINDING INSTRUCTION"
 _PREAMBLE_FILE = Path(__file__).resolve().parent / "v02_dispatch_preamble.md"
 
 
 def _inject_v02_preamble(skill_text: str) -> str:
-    """Insert the v0.2 dispatch preamble after the YAML frontmatter close.
+    """Replace the orchestrator skill body with the v0.2 dispatch directive.
 
-    Idempotent — if the preamble's marker is already present in the body,
-    the original text is returned unchanged. This means re-running
-    ``make install`` won't double-inject after the orchestrator's body
-    already has it.
+    The orchestrator only needs to know HOW to dispatch and to which runner.
+    The specialist *methodology* lives inside each role's own SKILL.md, which
+    the corresponding runner subprocess loads as its system prompt. Keeping
+    the full v0.1 body in the orchestrator's skill text caused the model to
+    ignore the dispatch directive at the top — 65KB of "do this work
+    yourself" outweighs 5KB of "no, dispatch instead." Empty user-test runs
+    proved this in v0.2-alpha.
+
+    Behavior:
+    - Preserve the YAML frontmatter exactly (description / activation tags).
+    - Replace the body with the contents of ``v02_dispatch_preamble.md``.
+    - Idempotent: if the marker is already at the top of the body, return
+      unchanged so re-runs don't append duplicates.
     """
     if not _PREAMBLE_FILE.is_file():
         log.warning("v0.2 preamble file missing at %s — orchestrator unchanged",
                     _PREAMBLE_FILE)
         return skill_text
-    if _PREAMBLE_MARKER in skill_text:
-        return skill_text  # already injected
 
-    preamble = _PREAMBLE_FILE.read_text(encoding="utf-8").rstrip() + "\n\n"
+    preamble = _PREAMBLE_FILE.read_text(encoding="utf-8").rstrip() + "\n"
 
     lines = skill_text.splitlines(keepends=True)
     if lines and lines[0].strip() == "---":
@@ -177,10 +184,11 @@ def _inject_v02_preamble(skill_text: str) -> str:
         for i in range(1, len(lines)):
             if lines[i].strip() == "---":
                 head = "".join(lines[: i + 1])
-                tail = "".join(lines[i + 1:])
-                return head + "\n" + preamble + tail.lstrip("\n")
-    # No frontmatter — just prepend.
-    return preamble + skill_text
+                # The body starts after the frontmatter — drop it entirely
+                # and replace with just the dispatch preamble.
+                return head + "\n" + preamble
+    # No frontmatter — replace the whole text with the preamble.
+    return preamble
 
 
 # ─── Skill manifest registration ────────────────────────────────────────────
