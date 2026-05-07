@@ -1,127 +1,249 @@
 # qwenpaw-production-grade-plugin
 
-QwenPaw port of the Claude Code [`production-grade`](https://github.com/nagisanzenin/claude-code-production-grade-plugin) plugin. **14 specialist skills + 8 shared protocols** turn QwenPaw from "writes code" into "delivers production-ready systems" — BRD, ADRs, tested code, security audit, CI/CD, runbook.
+**Turn QwenPaw from "writes code" into "delivers production-ready systems."**
 
-**Status:**
-- **v0.1.1** — stable. Single-agent walk through the pipeline. Drop-in for QwenPaw `>=1.1.5`.
-- **v0.2.0-alpha** — on `main`, untagged. Adds multi-agent ACP runners + parallelism (closes the "raw capability" gap from `plans/AUDIT_v0.1.1.md`). Test before tagging.
+This plugin gives QwenPaw 14 specialist personas (Product Manager, Solution Architect, Software Engineer, QA, Security, DevOps, …) plus 8 shared protocols. When you ask QwenPaw to build something, an **orchestrator** agent dispatches each phase to a fresh specialist subprocess (BRD, ADRs, code, tests, security audit, CI/CD, runbook), then materializes the deliverables on disk. Multi-agent dispatch + Wave-A/B/C parallelism replace the old single-agent walk that would drift after many turns.
+
+Port of the Claude Code [`production-grade`](https://github.com/nagisanzenin/claude-code-production-grade-plugin) plugin (same author, same MIT license).
+
+**Current release:** v0.2.0 — multi-agent ACP dispatch + per-role runner logs + stale-snapshot detector. Tested end-to-end against QwenPaw 1.1.6b1.
 
 ---
 
-## Quick install (3 minutes)
+## Quick install (5 minutes)
 
-You need QwenPaw running and a chat session that already works. If you don't have that yet, see [PHASE_0_RUNBOOK.md](./PHASE_0_RUNBOOK.md) first.
+**Prerequisites**
+
+- A working QwenPaw `>=1.1.5` install with at least one LLM provider configured (you should already be able to chat with QwenPaw at `http://localhost:<port>`)
+- The shell where you'll run `qwenpaw app` has the QwenPaw venv activated — `which qwenpaw` should print a path under your QwenPaw checkout
+
+That's it. The plugin pulls API keys from QwenPaw's secret store automatically — no shell `export` required for runners.
+
+**Install**
 
 ```bash
-# 1. clone
 git clone https://github.com/nagisanzenin/qwenpaw-production-grade-plugin
 cd qwenpaw-production-grade-plugin
-
-# 2. install (your QwenPaw venv must be active — `which qwenpaw` should print a path)
 make install
+```
 
-# 3. restart QwenPaw so the startup hook fires
-#    (Ctrl-C the running `qwenpaw app`, then start it again in the same venv)
+`make install` runs `qwenpaw plugin install . --force`, drops a `.dev_source` marker for stale-snapshot detection, then reminds you to restart `qwenpaw app`.
 
-# 4. verify everything's wired
+**Restart QwenPaw**
+
+Stop the running `qwenpaw app` (`Ctrl-C` in its terminal) and start it again. You should see this banner near the bottom of the boot output:
+
+```
+[production-grade] v0.2.0 starting (plugin root: ...)
+[production-grade] using bundled skills+protocols from ...
+[production-grade]   ✓ default: 14 skills
+[production-grade]   ✓ default: registered 22 ACP runners
+[production-grade]   ✓ P3: !`<cmd>` runtime expansion installed
+[production-grade]   ✓ P4: session guard + activation rules
+[production-grade]   ✓ P2: auto-receipt for delegate_external_agent
+[production-grade] specialist runners registered in N workspace(s)
+```
+
+**Verify**
+
+```bash
 make verify
 ```
 
-A successful `make verify` prints `all checks passed`. If anything fails it tells you exactly what to fix — see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for the full list of known failure modes.
-
-Then in chat:
-
-```
-/production-grade  add a basic Tasks CRUD API at ~/scratch/tasks-api/
-```
-
-You should see the orchestrator engage with `━━━ Production-Grade ━━━`-style headers, walk through DEFINE → BUILD → HARDEN phases, and produce real artifacts under `~/scratch/tasks-api/Claude-Production-Grade-Suite/`. Verification: `pytest -q` in the project should be green and the receipts dir should have one JSON per completed phase.
+A passing run ends with `0 FAIL, 0 warn — all checks passed`. Any failure prints exactly what to fix.
 
 ---
 
-## v0.2-alpha — extra setup (one-time)
+## Your first test (30 seconds)
 
-If you're trying the multi-agent path on `main`, you need at least one LLM API key in the shell that runs `qwenpaw app` so the spawned runner subprocesses can call out to a model:
+In the QwenPaw chat, send this **exact prompt** — the activation phrase matters:
+
+```
+use /production-grade skill
+Build me a small Python CLI that takes a folder of images and resizes them all to a target width. Put it in ~/scratch/img-cli.
+```
+
+> **Why "use /production-grade skill"?** The slash command alone (`/production-grade ...`) sometimes lets the orchestrator do the work inline instead of dispatching. Saying "use /production-grade skill" pins the activation. We're working to make this unnecessary, but for now this is the magic phrase.
+
+You should see, in order:
+
+1. The orchestrator calls `delegate_external_agent(runner="pgs-product-manager-a", ...)` — a fresh subprocess spawns, logs land at `~/.qwenpaw/logs/pg-runner-product-manager.log`
+2. Then `pgs-solution-architect-a` (architecture / ADRs)
+3. Then `pgs-software-engineer-a` (implementation skeleton)
+4. **Wave-B in parallel** — `pgs-qa-engineer-a` + `pgs-security-engineer-a` + `pgs-code-reviewer-a` fire concurrently
+5. Then `pgs-devops-a`, `pgs-technical-writer-a` as the methodology requires
+6. Real files land in `~/scratch/img-cli/` (code, tests, README, Dockerfile)
+7. Receipts auto-write to `~/scratch/img-cli/Claude-Production-Grade-Suite/.orchestrator/receipts/`
+
+Watch progress in three places:
 
 ```bash
-export OPENAI_API_KEY='sk-...'                  # default provider
-# or:
-export PG_LLM_PROVIDER=dashscope
-export DASHSCOPE_API_KEY='sk-...'
-# or:
-export PG_LLM_PROVIDER=together
-export TOGETHER_API_KEY='...'
+# orchestrator activity
+tail -f ~/.qwenpaw/qwenpaw.log
 
-# optional model override (otherwise sensible defaults per provider)
-export PG_LLM_MODEL='gpt-4o-mini'
+# specialist runner activity (one file per role; PID disambiguates copies)
+tail -f ~/.qwenpaw/logs/pg-runner-*.log
+
+# files being written
+watch -n 2 'find ~/scratch/img-cli -type f | head'
 ```
 
-Without a key set, runners die at dispatch time with `LLM call failed: missing key`. `make verify` warns if none are present.
+---
 
-Smoke-test the runner standalone first (no dispatch, just confirm bundled skills+protocols load):
-
-```bash
-make runner-smoke
-# expects: role: polymath / system_prompt: ~25k chars / first 80 chars: '#-Production-Grade Specialist…'
-```
-
-Then in chat:
+## What you get
 
 ```
-delegate_external_agent(action="start", runner="pgs-polymath-a",
-                        message="in 3 sentences, what trade-offs matter when choosing FastAPI vs Flask?")
+~/scratch/img-cli/
+├── pyproject.toml                    ← packaging
+├── README.md                         ← usage
+├── src/img_cli/
+│   ├── __init__.py
+│   ├── cli.py                        ← argparse entry
+│   └── core.py                       ← resize logic
+├── tests/
+│   └── test_core.py                  ← unit tests
+├── Dockerfile                        ← optional, from devops phase
+└── Claude-Production-Grade-Suite/
+    └── .orchestrator/
+        └── receipts/
+            ├── 01-product-manager-….json
+            ├── 02-solution-architect-….json
+            ├── 03-software-engineer-….json
+            └── …                      ← one per phase, recording artifacts + metrics
 ```
 
-If text streams back, the v0.2 dispatch path is functional and the orchestrator can use it.
-
-## What's in here
-
-```
-plugin.json, plugin.py            QwenPaw plugin entry
-production_grade/                 backend Python package (installer + port logic)
-skills/                           14 specialist SKILL.md files (bundled)
-protocols/                        8 shared protocol files (bundled)
-scripts/verify.sh                 post-install sanity check
-Makefile                          install / verify / port / update shortcuts
-
-INSTALL.md                        canonical install path + verify steps
-TROUBLESHOOTING.md                every known failure mode + fix
-CHANGELOG.md                      release history
-PHASE_0_RUNBOOK.md                pre-install: get QwenPaw itself working
-
-plans/                            design + research docs (read for v0.2+ context)
-```
+The receipts give you a full audit trail of what each specialist produced and what artifacts the orchestrator wrote on its behalf.
 
 ---
 
 ## Common operations
 
-| What | Command |
+| Task | Command |
 |---|---|
 | Install or reinstall | `make install` |
-| Verify install | `make verify` |
-| Refresh skills from upstream | `make update` (pulls upstream, re-ports, reinstalls) |
+| Iterate during development (shutdown → install → restart-prompt) | `make dev` |
+| Verify everything's wired | `make verify` |
+| List registered runners | `make runner-list` |
+| Smoke-test a runner standalone | `make runner-smoke` |
+| Refresh skills from upstream Claude Code plugin | `make update` |
 | Remove plugin | `make uninstall` |
-| Show all targets | `make help` |
+| Show all Make targets | `make help` |
 
 ---
 
-## What v0.1.1 actually does
+## How it works
 
-The plugin's startup hook copies the bundled SKILL.md files into each QwenPaw agent workspace, copies the 8 protocol files alongside them, and registers all 14 skills as `enabled` in the per-agent skill manifest (so they show up in the QwenPaw UI Skills tab).
+```
+┌─────────────────────────────────────────────────────────────┐
+│  user types: use /production-grade skill build me an X      │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+            ┌──────────────────────────────┐
+            │  ORCHESTRATOR (QwenPaw chat) │  reads dispatch protocol
+            │  reads SKILL.md (~7KB        │  from this plugin's
+            │  binding-instruction-only)   │  v02_dispatch_preamble.md
+            └──────────────┬───────────────┘
+                           │
+        delegate_external_agent(runner="pgs-product-manager-a", …)
+                           ▼
+            ┌──────────────────────────────┐    fresh subprocess
+            │  pgs-product-manager-a       │    via QwenPaw's ACP
+            │  loads role's full SKILL.md  │    spawn_agent_process
+            │  + 8 protocols as system     │    (stdio JSON-RPC)
+            │  prompt (~62KB)              │
+            └──────────────┬───────────────┘
+                           │  streams BRD text back
+                           ▼
+            ┌──────────────────────────────┐
+            │  ORCHESTRATOR receives text  │
+            │  writes BRD to disk via      │
+            │  write_file tool             │
+            │  writes receipt.json (P2)    │
+            └──────────────┬───────────────┘
+                           │  next phase…
+```
 
-That's it for v0.1.1. Specifically, **deferred to v0.2+**:
+Key design choices:
 
-- Custom ACP runners (no fresh context per specialist; long pipelines may drift in single-agent mode).
-- Custom MCP server for `pg__dispatch_specialist` / `pg__ask_user_question` etc.
-- Frontend tool renderers — gates render as plain-text option lists (you type the option name).
-- SessionStart project detection.
-- UserPromptSubmit activation rules (must explicitly type `/production-grade`).
+- **Orchestrator's SKILL.md is dispatch-only.** Replaced the original 76KB v0.1 body with 7KB of binding-instruction + Phase→Runner mapping, so the model can't get distracted into doing specialist work itself.
+- **Specialist methodology lives in each role's own SKILL.md.** The runner subprocess loads it as system prompt. Orchestrator never sees it — keeps signals clean.
+- **Per-role copies (`-a`, `-b`, `-c`) for parallelism.** QwenPaw's ACP service can't run two turns of the same `(session, runner)` pair concurrently, so Wave-B (QA + Security + Reviewer) uses `pgs-qa-engineer-a`, `pgs-security-engineer-a`, `pgs-code-reviewer-a` as 3 different runners.
+- **API keys flow from QwenPaw's secret store.** The installer reads each workspace's active model, pulls the encrypted API key from `~/.qwenpaw.secret/providers/`, decrypts via QwenPaw's own `secret_store`, and injects into the runner's env per-workspace. No shell `export` required.
 
-The full 100% functional-retention plan is in [`plans/08_full_parity_architecture.md`](./plans/08_full_parity_architecture.md).
+---
+
+## Troubleshooting
+
+### Symptoms checklist
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Orchestrator writes files inline, never dispatches | Activation phrase not strong enough | Use `use /production-grade skill ...` instead of bare `/production-grade ...` |
+| `delegate_external_agent` times out at 60s | Runner subprocess died on import | Check `~/.qwenpaw/logs/pg-runner-*.log` for stack trace; usually missing PYTHONPATH after stale install |
+| Empty specialist responses | Cross-turn history not flowing | Use `action="start"` for each new phase (this is the default in our preamble) |
+| `runner 'pgs-implementation-a' not available` | Orchestrator hallucinating runner name | Restart `qwenpaw app` so the latest preamble loads — see [Stale snapshots](#stale-snapshots) |
+| Edits to source not reflected in chat | Snapshot stale | Run `make dev` (shutdown + reinstall + restart-prompt) |
+
+### Stale snapshots
+
+`qwenpaw plugin install . --force` copies your source tree into `~/.qwenpaw/plugins/<id>/` as a snapshot. **Subsequent edits to your source aren't picked up until the next install.** This trips up plugin developers iterating in the source repo.
+
+We ship a stale-snapshot detector that catches this. At every `qwenpaw app` startup, the plugin compares source `.py` mtimes against the snapshot's. If source is newer by >5 seconds, it prints:
+
+```
+[production-grade] ⚠  source repo at /path/to/source
+[production-grade]    has changes 47s newer than this snapshot.
+[production-grade]    Run `make install` (in source) to refresh.
+[production-grade]    Otherwise QwenPaw runs stale plugin code.
+```
+
+If you see that, run `make dev` (or `make install` + restart manually).
+
+End-users who installed via `qwenpaw plugin install <git-url>` don't have a `.dev_source` marker and never see the warning — intentional.
+
+### Where to look when something fails
+
+1. **Plugin startup banner** — visible in the terminal where `qwenpaw app` runs. If you don't see `[production-grade] v0.2.0 starting`, the plugin didn't load.
+2. **`~/.qwenpaw/qwenpaw.log`** — orchestrator-side activity, including LLM token counts, tool calls, cancellations.
+3. **`~/.qwenpaw/logs/pg-runner-<role>.log`** — specialist-side activity, including LLM provider/model/base_url, prompt/response sizes, history depth, tracebacks. PID is on every line so concurrent copies are distinguishable.
+4. **`make verify`** — automated sanity check. Catches missing artifacts, wrong runner counts, hooks not attached.
+
+If all four look fine but the pipeline misbehaves, file an issue with the relevant `pg-runner-*.log` excerpt attached.
+
+---
+
+## What's in this repo
+
+```
+plugin.json, plugin.py            QwenPaw plugin entry — startup hook + diagnostics
+production_grade/                 backend Python package
+  installer.py                    ports skills/protocols into each workspace
+  acp_install.py                  registers pgs-<role>-<copy> ACP runners + env
+  hooks.py                        P2 (auto-receipt) + P3 (skill loader) + P4 (session guard)
+  specialists/runner.py           the ACP server every runner subprocess runs
+  v02_dispatch_preamble.md        the 7KB orchestrator dispatch directive
+skills/                           14 specialist SKILL.md files (bundled)
+protocols/                        8 shared protocol files (bundled)
+scripts/verify.sh                 post-install sanity check
+Makefile                          install / dev / verify / port / runner-smoke
+
+CHANGELOG.md                      release history
+plans/                            design + research docs
+```
+
+---
+
+## Versions and compatibility
+
+| Plugin version | QwenPaw min | Status |
+|---|---|---|
+| v0.2.0 | 1.1.5 | current — multi-agent dispatch + parallelism |
+| v0.1.1 | 1.1.5 | older single-agent walk; still works, less robust |
+
+`make verify` confirms QwenPaw version compatibility.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](./LICENSE). This plugin ports the upstream `nagisanzenin/claude-code-production-grade-plugin` (also MIT) by the same author.
+MIT — see [LICENSE](./LICENSE). This plugin ports the upstream Claude Code [`production-grade`](https://github.com/nagisanzenin/claude-code-production-grade-plugin) plugin (also MIT) by the same author.
