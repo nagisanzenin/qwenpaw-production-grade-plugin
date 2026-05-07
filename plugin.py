@@ -15,12 +15,11 @@ See ``08_full_parity_architecture.md`` in this repo for the v1.0+ plan.
 from __future__ import annotations
 
 import logging
+import sys
 import traceback
 from pathlib import Path
 
 from qwenpaw.plugins.api import PluginApi
-
-from production_grade.installer import install_skills_to_all_workspaces
 
 ROOT = Path(__file__).resolve().parent
 log = logging.getLogger("production-grade")
@@ -29,15 +28,22 @@ log = logging.getLogger("production-grade")
 class ProductionGradePlugin:
     """Entry class — required name ``plugin`` exported at module level below."""
 
-    async def register(self, api: PluginApi) -> None:
+    def register(self, api: PluginApi) -> None:
         api.register_startup_hook(
-            "pg_install_skills",
-            self._on_startup,
+            hook_name="pg_install_skills",
+            callback=self._on_startup,
             priority=100,
         )
 
-    async def _on_startup(self) -> None:
+    def _on_startup(self) -> None:
+        # Make the sibling ``production_grade/`` package importable. The plugin
+        # validator loads this file as a standalone module via importlib, so
+        # the parent dir isn't on sys.path by default.
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
         try:
+            from production_grade.installer import install_skills_to_all_workspaces
+
             n = install_skills_to_all_workspaces(plugin_root=ROOT)
             print(
                 f"[production-grade] installed into {n} workspace(s)",
