@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Node (for any future frontend bundle)
+node_modules/
+*.log
+.npm
+.yarn/
+.pnp.*
+
+# QwenPaw plugin install cache (if user clones into here)
+.qwenpaw/
+.upstream/
+
+# Local-only test scratch
+/scratch/
+*.local.md

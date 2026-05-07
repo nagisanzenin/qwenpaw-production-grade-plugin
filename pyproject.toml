@@ -1,0 +1,27 @@
+[project]
+name = "qwenpaw-production-grade-plugin"
+version = "0.1.0"
+description = "QwenPaw port of the Claude Code production-grade plugin"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<3.14"
+authors = [
+  { name = "nagisanzenin" },
+]
+keywords = [
+  "qwenpaw", "production-grade", "saas", "orchestrator",
+  "full-stack", "meta-skill", "pipeline", "devops",
+  "architecture", "testing", "security", "sre",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/nagisanzenin/qwenpaw-production-grade-plugin"
+Upstream = "https://github.com/nagisanzenin/claude-code-production-grade-plugin"
+
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["production_grade*"]
