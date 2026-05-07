@@ -153,7 +153,7 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
         **_kwargs,
     ) -> NewSessionResponse:
         sid = uuid4().hex
-        self._sessions[sid] = {"cwd": cwd}
+        self._sessions[sid] = {"cwd": cwd, "history": []}
         self.log.info("new_session: id=%s cwd=%s", sid, cwd)
         return NewSessionResponse(session_id=sid)
 
@@ -168,24 +168,58 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
             self.log.error("prompt called with no _conn attached")
             return PromptResponse(stop_reason="refusal")
 
+        # Lazy-init session if QwenPaw skipped new_session (defensive — shouldn't
+        # happen, but the alternative is dropping prior turns silently).
+        session = self._sessions.setdefault(
+            session_id, {"cwd": ".", "history": []},
+        )
+        history: list[dict] = session.setdefault("history", [])
+
         user_text = self._extract_user_text(prompt)
+        history.append({"role": "user", "content": user_text or "(empty prompt)"})
         self.log.info(
-            "prompt session=%s len=%d preview=%r",
-            session_id, len(user_text), user_text[:120],
+            "prompt session=%s turns=%d len=%d preview=%r",
+            session_id, len(history), len(user_text), user_text[:120],
         )
 
+        full_text_parts: list[str] = []
         try:
-            async for delta in self._stream_llm(user_text):
+            async for delta in self._stream_llm(history):
                 if not delta:
                     continue
+                full_text_parts.append(delta)
                 await self._conn.session_update(
                     session_id=session_id,
                     update=update_agent_message(text_block(delta)),
+                )
+            full_text = "".join(full_text_parts)
+            history.append({"role": "assistant", "content": full_text})
+            self.log.info(
+                "prompt done session=%s response_len=%d turns=%d",
+                session_id, len(full_text), len(history),
+            )
+            if not full_text.strip():
+                # Surface empty-LLM-response so the orchestrator doesn't see a
+                # silent end_turn that looks like the runner did nothing.
+                warn = (
+                    f"[pg-runner role={self.role}] LLM returned no content for "
+                    f"this turn (history depth={len(history)}). Likely the "
+                    f"follow-up message lacks context the model needs; consider "
+                    f"`action=\"start\"` for a fresh phase rather than "
+                    f"`action=\"message\"`."
+                )
+                await self._conn.session_update(
+                    session_id=session_id,
+                    update=update_agent_message(text_block(warn)),
                 )
             return PromptResponse(stop_reason="end_turn")
         except Exception as exc:  # noqa: BLE001
             tb = traceback.format_exc()
             self.log.error("prompt failed: %s\n%s", exc, tb)
+            # Roll back the user turn we just appended; otherwise a retry would
+            # see a duplicated tail.
+            if history and history[-1]["role"] == "user":
+                history.pop()
             err = (
                 f"[pg-runner role={self.role}] LLM call failed: "
                 f"{type(exc).__name__}: {exc}\n"
@@ -259,7 +293,13 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
                 out_parts.append(str(blk["text"]))
         return "".join(out_parts)
 
-    async def _stream_llm(self, user_text: str) -> AsyncIterator[str]:
+    async def _stream_llm(self, history: list[dict]) -> AsyncIterator[str]:
+        """Stream tokens from the LLM with full session history.
+
+        ``history`` is the per-session conversation log so the model has the
+        original task context on follow-up turns (action="message"). Without
+        this the LLM sees only "Please proceed now" and returns nothing.
+        """
         provider = os.environ.get("PG_LLM_PROVIDER", "openai").lower()
         model = os.environ.get("PG_LLM_MODEL") or _default_model(provider)
         base_url = os.environ.get("PG_LLM_BASE_URL") or os.environ.get(
@@ -279,16 +319,14 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
             else AsyncOpenAI(api_key=api_key)
         )
 
+        messages = [{"role": "system", "content": self.system_prompt}, *history]
         self.log.info(
-            "llm provider=%s model=%s base_url=%s",
-            provider, model, base_url or "(default)",
+            "llm provider=%s model=%s base_url=%s history_turns=%d",
+            provider, model, base_url or "(default)", len(history),
         )
         stream = await client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_text or "(empty prompt)"},
-            ],
+            messages=messages,
             stream=True,
         )
         async for chunk in stream:
