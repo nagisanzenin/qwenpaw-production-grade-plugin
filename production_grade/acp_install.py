@@ -98,6 +98,10 @@ def register_specialist_runners(plugin_root: Path) -> int:
         # Per-workspace runner env (decrypted API key, base_url, model).
         ws_env = _runner_env(plugin_root, agent_id=agent_id, agent_cfg=cfg)
 
+        # Ensure delegate_external_agent is enabled — registering runners is
+        # pointless if the agent can't invoke them. Idempotent.
+        _ensure_tool_enabled(cfg, "delegate_external_agent")
+
         n_role_copies = 0
         for role, n_copies in COPIES_PER_ROLE.items():
             for i in range(n_copies):
@@ -199,6 +203,44 @@ def _runner_env(plugin_root: Path, *, agent_id: str, agent_cfg) -> dict[str, str
             env.setdefault(name, v)
 
     return env
+
+
+def _ensure_tool_enabled(agent_cfg, tool_name: str) -> None:
+    """Flip ``agent_cfg.tools.builtin_tools.<tool_name>.enabled = True``.
+
+    Tolerates Pydantic-model and dict-style configs.  No-op if the tool is
+    already enabled or if the structure is unfamiliar (we never crash here).
+    """
+    try:
+        tools = getattr(agent_cfg, "tools", None)
+        if tools is None:
+            return
+        builtin = getattr(tools, "builtin_tools", None)
+        if builtin is None and isinstance(tools, dict):
+            builtin = tools.get("builtin_tools")
+        if builtin is None:
+            return
+
+        # Pydantic-style root: builtin is itself a model with attribute access.
+        if hasattr(builtin, tool_name):
+            tool_cfg = getattr(builtin, tool_name)
+            if hasattr(tool_cfg, "enabled"):
+                if not tool_cfg.enabled:
+                    tool_cfg.enabled = True
+                    log.info("enabled tool: %s", tool_name)
+                return
+        # Dict-style: builtin_tools is a dict of tool name → config.
+        if isinstance(builtin, dict):
+            entry = builtin.setdefault(tool_name, {})
+            if isinstance(entry, dict):
+                if not entry.get("enabled"):
+                    entry["enabled"] = True
+                    entry.setdefault("async_execution", False)
+                    entry.setdefault("config", {})
+                    log.info("enabled tool: %s", tool_name)
+            return
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ensure_tool_enabled(%s) failed: %s", tool_name, exc)
 
 
 def _attr_or_key(obj, name: str):

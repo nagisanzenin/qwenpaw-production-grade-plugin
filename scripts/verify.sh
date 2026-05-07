@@ -120,6 +120,27 @@ else
 fi
 
 echo
+echo "=== v0.2-alpha: delegate_external_agent enabled ==="
+for ws in "$ws_root"/*/; do
+  [ -d "$ws" ] || continue
+  name=$(basename "$ws")
+  if [ -f "${ws}agent.json" ]; then
+    enabled=$(python3 -c "
+import json
+d=json.load(open('${ws}agent.json'))
+t=(d.get('tools') or {}).get('builtin_tools') or {}
+e=(t.get('delegate_external_agent') or {}).get('enabled')
+print('true' if e else 'false')
+" 2>/dev/null || echo unknown)
+    if [ "$enabled" = "true" ]; then
+      pass "$name: delegate_external_agent enabled"
+    else
+      fail "$name: delegate_external_agent NOT enabled — runners are unreachable from chat. Re-run \`make install\` to fix."
+    fi
+  fi
+done
+
+echo
 echo "=== v0.2-alpha: P2/P3/P4 hooks attached ==="
 hook_check=$(python3 -c "
 import sys
