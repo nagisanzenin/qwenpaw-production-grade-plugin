@@ -98,6 +98,21 @@ All three are installed via a single `install_hooks(plugin_root)` call
 from `plugin._on_startup`. Re-installable; idempotent (won't
 double-register class hooks or double-patch the skill loader).
 
+### Fixed — runner spawn under arbitrary cwd
+
+- **`acp_install.py` — set `PYTHONPATH` in runner env.** When QwenPaw spawns
+  a `pgs-<role>-<copy>` runner, it inherits the user's chat-workspace cwd
+  (e.g. `~/scratch/<project>/`). With no `PYTHONPATH`, `python -m
+  production_grade.specialists` could not locate the package — the
+  subprocess died on import in <50ms. The parent `delegate_external_agent`
+  call then hung waiting for an `initialize` response that would never
+  arrive, manifesting in chat as the dreaded "preset max runtime"
+  timeout. Fix: prepend `plugin_root` to `PYTHONPATH` in `_runner_env()`.
+  Verified via `/tmp` cwd repro: 21 streamed chunks, `stop_reason='end_turn'`,
+  9.88s total. The previous "direct ACP client works, QwenPaw chat hangs"
+  asymmetry is fully explained by this — my test happened to spawn from
+  the plugin-root cwd, where `python -m` finds the package via `sys.path[0]`.
+
 ### Tracking — to reach 100% (per `plans/08_full_parity_architecture.md`)
 
 Done in this release:

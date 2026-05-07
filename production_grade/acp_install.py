@@ -162,8 +162,19 @@ def _runner_env(plugin_root: Path, *, agent_id: str, agent_cfg) -> dict[str, str
        config didn't already supply them — useful for ``TAVILY_API_KEY``
        or for users who do prefer to set keys in their shell.
     """
+    # PYTHONPATH must include plugin_root so `python -m production_grade.specialists`
+    # works no matter what cwd QwenPaw spawns the runner with. Without this, the
+    # subprocess cwd defaults to the user's chat workspace (e.g. ~/scratch/<proj>/),
+    # `production_grade` is not on sys.path, the runner dies on import in <50ms,
+    # and `delegate_external_agent` hangs forever waiting for an initialize
+    # response from a dead pipe — manifests in chat as a max-runtime timeout.
+    existing_pp = os.environ.get("PYTHONPATH", "")
+    pythonpath = (
+        f"{plugin_root}{os.pathsep}{existing_pp}" if existing_pp else str(plugin_root)
+    )
     env: dict[str, str] = {
         "PG_ROOT": str(plugin_root),
+        "PYTHONPATH": pythonpath,
         # Belt-and-suspenders for stdio buffering (also -u in args).
         "PYTHONUNBUFFERED": "1",
     }
