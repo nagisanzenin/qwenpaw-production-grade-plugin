@@ -77,8 +77,12 @@ def register_specialist_runners(plugin_root: Path) -> int:
         log.info("no workspaces at %s; skipping ACP runner install", ws_root)
         return 0
 
+    # ``-u`` forces unbuffered stdout — critical for ACP stdio JSON-RPC.
+    # Without it, Python block-buffers when stdout isn't a tty (i.e. when
+    # spawned as a subprocess), and JSON-RPC frames sit in the buffer until
+    # threshold is hit, making it look like the runner hangs.
     cmd = sys.executable
-    common_args = ["-m", "production_grade.specialists"]
+    common_args = ["-u", "-m", "production_grade.specialists"]
 
     written = 0
     for ws in sorted(ws_root.iterdir()):
@@ -158,7 +162,11 @@ def _runner_env(plugin_root: Path, *, agent_id: str, agent_cfg) -> dict[str, str
        config didn't already supply them — useful for ``TAVILY_API_KEY``
        or for users who do prefer to set keys in their shell.
     """
-    env: dict[str, str] = {"PG_ROOT": str(plugin_root)}
+    env: dict[str, str] = {
+        "PG_ROOT": str(plugin_root),
+        # Belt-and-suspenders for stdio buffering (also -u in args).
+        "PYTHONUNBUFFERED": "1",
+    }
 
     # 1. Resolve from active provider via QwenPaw's secret store.
     try:

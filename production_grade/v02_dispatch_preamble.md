@@ -25,6 +25,11 @@ delegate_external_agent(
     runner="pgs-<role>-<copy>",     # e.g. pgs-product-manager-a
     message="<concrete task — one phase of work for this role>",
     cwd="<absolute project root, if applicable>",
+    max_runtime=600,                # 10 minutes — cold-start + LLM first-token
+                                    # can be 10-15s, and a real specialist
+                                    # response with the full role methodology
+                                    # loaded easily takes 30-120s. Default 60s
+                                    # is too short for first call of the session.
 )
 ```
 
