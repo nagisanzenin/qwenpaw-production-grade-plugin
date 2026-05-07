@@ -1,189 +1,179 @@
 # Install
 
-Two install modes:
-
-- **Bundled (recommended for sharing):** the port has already been run; `skills/` and `protocols/` are committed in this repo. One command installs.
-- **Live-port (recommended for the original author syncing with upstream):** the port runs at plugin install time, reading from your local upstream copy.
-
-The plugin auto-detects which mode applies — bundled wins if `skills/` is populated.
+Single canonical path. The plugin ships with skills + protocols already bundled; one command installs, one command verifies. If anything breaks, [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) covers every known failure.
 
 ---
 
-## Prerequisites
+## 0. Prerequisites
 
-- QwenPaw `>=1.1.5` installed and chat working (`qwenpaw app` boots, you can chat). If not, follow the QwenPaw quickstart first.
-- An LLM provider configured in QwenPaw → Settings → Models.
-- Python `>=3.10,<3.14`.
+You must already have:
+
+- **QwenPaw installed and running.** `qwenpaw app` boots, you can chat with it, an LLM provider is configured under Settings → Models.
+- **Python `>=3.10,<3.14`.** QwenPaw's own requirement; this plugin inherits it.
+- **The QwenPaw venv active in your shell.** `which qwenpaw` should print a path. If it doesn't, your venv isn't sourced — see TROUBLESHOOTING.md → "qwenpaw not on PATH".
+
+If QwenPaw isn't running yet, see [PHASE_0_RUNBOOK.md](./PHASE_0_RUNBOOK.md). It walks you from zero to working chat.
 
 ---
 
-## Bundled install (3 commands)
+## 1. Install
 
 ```bash
 git clone https://github.com/nagisanzenin/qwenpaw-production-grade-plugin
 cd qwenpaw-production-grade-plugin
-qwenpaw plugin install . --force
+make install
 ```
 
-Restart QwenPaw (`Ctrl-C` and `qwenpaw app` again). On startup you should see:
+Under the hood `make install` runs `qwenpaw plugin install . --force` and prints next-step reminders.
+
+You should see in the output:
 
 ```
-[production-grade] using bundled skills+protocols from /…/qwenpaw-production-grade-plugin
+📦 Installing plugin: Production-Grade (production-grade)
+🔍 Validating plugin structure...
+✓ Plugin installed
+```
+
+## 2. Restart QwenPaw
+
+The plugin's install logic runs in a startup hook. The hook fires on app start, so you have to bounce `qwenpaw app`:
+
+```bash
+# In the terminal running qwenpaw app:
+# Ctrl-C
+qwenpaw app
+```
+
+Watch the new stdout for:
+
+```
+[production-grade] using bundled skills+protocols from /Users/.../qwenpaw-production-grade-plugin
 [production-grade]   ✓ default: 14 skills
 [production-grade] installed into 1 workspace(s)
 ```
 
-**If you see "no bundled skills"** — the repo wasn't shipped with the bundled output. Switch to the live-port flow below.
+If you don't see those lines after the restart, the hook didn't fire — see TROUBLESHOOTING.md → "Startup hook silent".
 
----
-
-## Live-port install (for the upstream author / fresh clones)
-
-You need a local clone of the upstream Claude Code plugin (MIT licensed).
+## 3. Verify
 
 ```bash
-# 1. clone upstream
-mkdir -p ~/Documents/Github
-git clone https://github.com/nagisanzenin/claude-code-production-grade-plugin \
-  ~/Documents/Github/claude-code-production-grade-plugin
-
-# 2. clone this plugin
-git clone https://github.com/nagisanzenin/qwenpaw-production-grade-plugin
-cd qwenpaw-production-grade-plugin
-qwenpaw plugin install . --force
+make verify
 ```
 
-The startup hook resolves upstream in this order:
+A clean run prints `all checks passed`. The script checks:
 
-1. `$CLAUDE_PRODUCTION_GRADE_UPSTREAM` env var
-2. `~/Documents/Github/claude-code-production-grade-plugin/`
-3. Sibling directory next to this plugin
-4. `~/.claude/plugins/cache/nagisanzenin/production-grade/<version>/`
+- `qwenpaw` is on PATH.
+- `production-grade` is in `qwenpaw plugin list`.
+- The bundled `skills/` and `protocols/` directories are intact (14 / 8).
+- Each QwenPaw workspace has the skills installed under `skills/<name>/SKILL.md`.
+- Each workspace's `skill.json` lists all 14 production-grade skills as `enabled`.
 
-If your upstream lives elsewhere, set the env var before `qwenpaw app`.
+If anything fails, the output names the exact remediation — paste it in the [issues tab](https://github.com/nagisanzenin/qwenpaw-production-grade-plugin/issues) if you can't fix it from the message alone.
 
-Restart QwenPaw. Output:
+## 4. Sanity-check in chat
+
+In the QwenPaw web console (default http://127.0.0.1:8088/), hard-refresh the browser (Cmd+Shift+R) so the React app picks up the new skills, then run:
 
 ```
-[production-grade] live-porting from upstream at /Users/.../claude-code-production-grade-plugin
-[production-grade]   ✓ default: 14 skills
-[production-grade] installed into 1 workspace(s)
+/production-grade  in MODE=Explore, give me a 4-5 sentence overview of what you would do if I asked you to build a Tasks CRUD API. Use the Visual Identity protocol headers.
 ```
 
----
+The reply should:
 
-## Bundle the port (for the original author)
+- Open with `━━━ Production-Grade ━━━` (or similar Unicode-rule header).
+- Mention modes by name (`Full Build`, `Feature`, `Harden`, etc.).
+- Mention which specialists it would dispatch.
 
-If you maintain the upstream and want to ship a self-contained release, run the port once and commit the output:
+If the reply is generic and skips the protocol headers, see TROUBLESHOOTING.md → "Methodology not engaged".
+
+## 5. (Optional) Run a real pipeline
+
+Once the smoke test passes, you can drive the full pipeline. Recommended first real test:
 
 ```bash
-cd qwenpaw-production-grade-plugin
-python -m production_grade.port_from_upstream --clean
-git add skills/ protocols/
-git commit -m "port: refresh bundled skills + protocols from upstream <commit-sha>"
-git tag v0.1.0
-git push --follow-tags
+mkdir -p ~/scratch/tasks-api
 ```
 
-The `--clean` flag wipes existing `skills/` and `protocols/` first so removed-upstream files don't linger.
-
-After a bundled push, anyone who clones gets the **bundled-install** flow (no upstream clone needed).
-
----
-
-## Verify
-
-```bash
-qwenpaw plugin list
-# expect: production-grade
-
-qwenpaw skills list
-# expect: production-grade, polymath, product-manager, solution-architect,
-# software-engineer, frontend-engineer, qa-engineer, security-engineer,
-# code-reviewer, devops, sre, technical-writer, data-scientist, skill-maker
-
-ls ~/.qwenpaw/workspaces/*/skills/
-# expect: 14 directories
-
-ls ~/.qwenpaw/workspaces/*/production-grade-protocols/
-# expect: 8 .md files
-```
-
-In chat:
+Then in chat:
 
 ```
 /production-grade
+
+Create a minimal Tasks CRUD API at ~/scratch/tasks-api/.
+Stack: Python 3.11+, FastAPI, SQLAlchemy + SQLite, pytest, ruff.
+Endpoints: POST/GET /tasks, GET/PATCH/DELETE /tasks/{id}.
+Auth: API-key header on writes. Engagement: Standard.
+Acceptance: pytest passes; OpenAPI doc renders; ruff clean.
+Production-grade deliverables: BRD, ADRs, security audit, runbook, README.
 ```
 
-Should load the orchestrator skill. Then:
-
-```
-/production-grade  add a CRUD endpoint for a "tasks" resource
-```
-
-The orchestrator should classify your request and walk through the appropriate phases.
-
----
-
-## What works in v0.1
-
-- All 14 specialist SKILL.md bodies installed and routable via `/<skill>`.
-- 8 shared protocols at `~/.qwenpaw/workspaces/<id>/production-grade-protocols/`.
-- Tool-name translation (`Read` → `read_file`, `WebSearch` → `tavily_search`, etc.).
-- `Claude-Production-Grade-Suite/` workspace bootstrap done by the orchestrator skill body.
-
-## What's deferred to v0.2+
-
-See `08_full_parity_architecture.md`. v0.1 omits:
-
-- ❌ Custom ACP runners (specialists run in the orchestrator's context).
-- ❌ Custom MCP server.
-- ❌ Frontend tool renderers (gates show as plain-text option lists).
-- ❌ SessionStart project detection.
-- ❌ UserPromptSubmit activation rules.
-
----
-
-## Updating from upstream
-
-If you bundled, just re-run the port and commit:
+Expect 15-30 minutes wall-clock. After completion, audit with:
 
 ```bash
-cd ~/Documents/Github/claude-code-production-grade-plugin
-git pull
-cd ~/Documents/Github/qwenpaw-production-grade-plugin
-python -m production_grade.port_from_upstream --clean
-git add skills/ protocols/
-git commit -m "port: refresh from upstream <commit-sha>"
-qwenpaw plugin install . --force
-# restart qwenpaw app
+ls ~/scratch/tasks-api/Claude-Production-Grade-Suite/.orchestrator/receipts/
+cd ~/scratch/tasks-api && pytest -q
 ```
 
-In live-port mode, just `git pull` upstream and `qwenpaw plugin install . --force`.
+A healthy run produces 6-12 receipt JSON files (each a phase outcome) and a green pytest.
+
+---
+
+## Updating
+
+Two flavors:
+
+**Just refresh skills from your local upstream and reinstall:**
+
+```bash
+make update    # equivalent to: upstream-pull → port-clean → install
+```
+
+**Major plugin update (new tag from this repo):**
+
+```bash
+cd ~/Documents/Github/qwenpaw-production-grade-plugin
+git fetch && git checkout v0.x.y
+make install
+# restart qwenpaw app
+make verify
+```
 
 ---
 
 ## Uninstall
 
 ```bash
-qwenpaw plugin uninstall production-grade
+make uninstall
 ```
 
-Manually clean leftover workspace files for a fresh state:
+That removes the plugin from QwenPaw but leaves the workspace files alone (so you can reinstall and resume). To wipe the workspace traces too:
 
 ```bash
 rm -rf ~/.qwenpaw/workspaces/*/skills/{production-grade,polymath,product-manager,solution-architect,software-engineer,frontend-engineer,qa-engineer,security-engineer,code-reviewer,devops,sre,technical-writer,data-scientist,skill-maker}
 rm -rf ~/.qwenpaw/workspaces/*/production-grade-protocols
 ```
 
+Skill manifest entries clean themselves up after the next QwenPaw restart.
+
 ---
 
-## Troubleshooting
+## For maintainers — re-bundling from upstream
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `No bundled skills/ in this plugin and no upstream … found` | Neither bundled nor upstream available | Run `python -m production_grade.port_from_upstream` (needs upstream cloned) OR set `CLAUDE_PRODUCTION_GRADE_UPSTREAM` |
-| `qwenpaw skills list` shows nothing | Startup hook didn't fire | Confirm `qwenpaw plugin list` shows `production-grade` enabled; restart `qwenpaw app` |
-| `/production-grade` returns nothing | Skill workspace install missing | `ls ~/.qwenpaw/workspaces/*/skills/production-grade/SKILL.md` should exist |
-| Tool-name mismatch in chat | Port logic missed a translation | Open `production_grade/port_logic.py:_TOOL_TRANSLATIONS`; add the mapping; re-port; reinstall |
-| `tavily_search` not found | `TAVILY_API_KEY` not set | Set the env var before `qwenpaw app`; without it the Freshness Protocol is skipped |
+(Skip this section if you're just installing.)
+
+If you maintain the upstream and want to ship a new bundled release:
+
+```bash
+cd ~/Documents/Github/qwenpaw-production-grade-plugin
+make port-clean              # regenerates skills/ and protocols/ from upstream
+git add skills/ protocols/
+git commit -m "port: refresh bundled skills + protocols from upstream <sha>"
+git tag v0.x.y
+git push --follow-tags
+```
+
+The `--clean` flag wipes existing output before regenerating, so removed-upstream files don't linger. Only commit a new tag once `make verify` is green against the freshly-ported bundle.
+
+---
+
+See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for the full failure-mode catalog.

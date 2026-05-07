@@ -1,8 +1,8 @@
 {
   "id": "production-grade",
   "name": "Production-Grade",
-  "version": "0.1.0",
-  "description": "Port of the Claude Code production-grade plugin to QwenPaw. 14 specialist skills + 8 shared protocols for end-to-end production-ready software delivery. v0.1 is a single-agent walk through the pipeline; multi-agent ACP runners and frontend gate UI are planned for v0.2+.",
+  "version": "0.1.1",
+  "description": "Port of the Claude Code production-grade plugin to QwenPaw. 14 specialist skills + 8 shared protocols for end-to-end production-ready software delivery (BRD, ADRs, tested code, security audit, CI/CD, runbook). Single-agent walk through the pipeline in v0.1; multi-agent ACP runners and frontend gate UI planned for v0.2+.",
   "author": "nagisanzenin (QwenPaw port of nagisanzenin/claude-code-production-grade-plugin)",
   "entry": { "backend": "plugin.py" },
   "dependencies": [],

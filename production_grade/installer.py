@@ -6,50 +6,51 @@ production_grade.port_from_upstream`` once to populate). If the bundled dirs
 are missing or empty, it falls back to **live-porting** from your local copy
 of ``nagisanzenin/claude-code-production-grade-plugin`` (MIT) at install time.
 
-Upstream resolution order (live-port fallback only):
+Three things happen per workspace:
 
-1. ``CLAUDE_PRODUCTION_GRADE_UPSTREAM`` env var (absolute path)
-2. ``~/Documents/Github/claude-code-production-grade-plugin/`` (default)
-3. Sibling directory next to this plugin
-4. ``~/.claude/plugins/cache/nagisanzenin/production-grade/<version>/``
+1. Adapted ``SKILL.md`` files written under ``<workspace>/skills/<name>/``.
+2. Verbatim protocol files written under
+   ``<workspace>/production-grade-protocols/``.
+3. Each ported skill is registered/enabled in
+   ``<workspace>/skill.json`` (the per-agent manifest QwenPaw reads to
+   populate its Skills tab and to route ``/<name>`` invocations).
 
-Each agent workspace gets:
-
-- ``skills/<name>/SKILL.md``                   — adapted skill body
-- ``production-grade-protocols/<name>.md``     — verbatim protocol files
-
-Adapted skills written to a workspace have their ``${PG_PROTOCOLS}``
-placeholder replaced with the workspace's absolute protocols dir, so the
-model can ``read_file`` protocols without environment variables.
+Without step 3 the skills exist on disk but don't show up in the QwenPaw
+console UI — that's the v0.1.1 fix vs v0.1.0.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import shutil
-import traceback
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from production_grade.port_logic import adapt_skill
 
 log = logging.getLogger("production-grade.installer")
 
+PG_VERSION = "0.1.1"
+SKILL_NAMES = [
+    "production-grade", "polymath", "product-manager", "solution-architect",
+    "software-engineer", "frontend-engineer", "qa-engineer", "security-engineer",
+    "code-reviewer", "devops", "sre", "technical-writer", "data-scientist",
+    "skill-maker",
+]
+
 # ─── Public API ─────────────────────────────────────────────────────────────
 
 
 def install_skills_to_all_workspaces(plugin_root: Path) -> int:
-    """Install skills + protocols into every QwenPaw agent workspace.
-
-    Returns the number of workspaces written to. Bundled-first; falls back to
-    live-porting from upstream when bundled dirs are empty.
-    """
     bundle = _find_bundle(plugin_root)
     if bundle is not None:
         skills_src, protocols_src = bundle
         bundled = True
         print(
-            f"[production-grade] using bundled skills+protocols from "
-            f"{plugin_root}",
+            f"[production-grade] using bundled skills+protocols from {plugin_root}",
             flush=True,
         )
     else:
@@ -113,21 +114,15 @@ def _install_into_workspace(
     dst_skills.mkdir(exist_ok=True)
     dst_protocols.mkdir(exist_ok=True)
 
-    # Protocols: verbatim copy.
     if protocols_src.is_dir():
         for src in protocols_src.iterdir():
             if src.is_file() and src.suffix == ".md":
                 shutil.copy2(src, dst_protocols / src.name)
 
-    # Skills:
-    #   - bundled: adaptation already applied at port time; only the
-    #     ${PG_PROTOCOLS} placeholder needs to be substituted to the
-    #     workspace's absolute protocols path.
-    #   - live: read upstream SKILL.md and adapt fully on the fly.
-    n_skills = 0
+    installed_metadata: dict[str, dict] = {}
     for src_dir in skills_src.iterdir():
         if not src_dir.is_dir() or src_dir.name.startswith("_"):
-            continue  # skip _shared/, _archive/, etc.
+            continue
         src_md = src_dir / "SKILL.md"
         if not src_md.is_file():
             continue
@@ -139,21 +134,98 @@ def _install_into_workspace(
         else:
             text = adapt_skill(text, protocols_dir=dst_protocols)
         (dst_dir / "SKILL.md").write_text(text, encoding="utf-8")
-        n_skills += 1
+        installed_metadata[src_dir.name] = _extract_skill_metadata(text)
 
-    log.info("workspace %s: installed %d skills", workspace.name, n_skills)
+    _update_skill_manifest(workspace, installed_metadata)
+
+    log.info("workspace %s: installed %d skills", workspace.name, len(installed_metadata))
     print(
-        f"[production-grade]   ✓ {workspace.name}: {n_skills} skills",
+        f"[production-grade]   ✓ {workspace.name}: {len(installed_metadata)} skills",
         flush=True,
     )
+
+
+# ─── Skill manifest registration ────────────────────────────────────────────
+
+_FM_FENCE = re.compile(r"^---\s*$", re.MULTILINE)
+_FM_NAME = re.compile(r"^name:\s*(.+?)\s*$", re.MULTILINE)
+_FM_DESCRIPTION = re.compile(r"^description:\s*(.+?)(?=\n[A-Za-z][A-Za-z0-9_-]*:|\n---|\Z)", re.DOTALL | re.MULTILINE)
+
+
+def _extract_skill_metadata(skill_md_text: str) -> dict:
+    """Pull (name, description) from a SKILL.md body's YAML frontmatter."""
+    fm_match = list(_FM_FENCE.finditer(skill_md_text))
+    if len(fm_match) < 2:
+        return {"name": "", "description": ""}
+    fm = skill_md_text[fm_match[0].end():fm_match[1].start()]
+    name = (_FM_NAME.search(fm).group(1).strip() if _FM_NAME.search(fm) else "")
+    desc_m = _FM_DESCRIPTION.search(fm)
+    description = ""
+    if desc_m:
+        raw = desc_m.group(1).strip()
+        # YAML folded scalar (>) collapses newlines into spaces; treat like that.
+        if raw.startswith(">"):
+            raw = raw[1:].strip()
+        description = re.sub(r"\s+", " ", raw)
+    return {"name": name, "description": description}
+
+
+def _update_skill_manifest(workspace: Path, installed: dict[str, dict]) -> None:
+    """Add/update ``<workspace>/skill.json`` so each ported skill is enabled
+    and visible in the QwenPaw Skills tab.
+
+    Preserves entries for skills not in this plugin (built-ins, other plugins,
+    user-customized skills).
+    """
+    manifest_path = workspace / "skill.json"
+    now_ms = int(time.time() * 1000)
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            log.warning("skill.json malformed; rewriting from scratch")
+            manifest = {}
+    else:
+        manifest = {}
+
+    manifest.setdefault("schema_version", "workspace-skill-manifest.v1")
+    manifest["version"] = now_ms
+    skills = manifest.setdefault("skills", {})
+
+    for skill_name, meta in installed.items():
+        existing = skills.get(skill_name, {})
+        # Preserve user-set channels/config if already present.
+        skill_entry = {
+            "enabled": existing.get("enabled", True),
+            "channels": existing.get("channels", ["all"]),
+            "source": "customized",
+            "metadata": {
+                "name": meta.get("name", skill_name),
+                "description": meta.get("description", ""),
+                "version_text": PG_VERSION,
+                "commit_text": "",
+                "source": "customized",
+                "protected": False,
+                "requirements": {"require_bins": [], "require_envs": []},
+                "updated_at": now_iso,
+            },
+            "requirements": {"require_bins": [], "require_envs": []},
+            "updated_at": now_iso,
+            "config": existing.get("config", {}),
+        }
+        skills[skill_name] = skill_entry
+
+    tmp = manifest_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    tmp.replace(manifest_path)
 
 
 # ─── Bundle / upstream resolution ──────────────────────────────────────────
 
 
 def _find_bundle(plugin_root: Path) -> tuple[Path, Path] | None:
-    """Return ``(skills_dir, protocols_dir)`` if the plugin has bundled
-    content, else ``None``."""
     skills = plugin_root / "skills"
     protocols = plugin_root / "protocols"
     has_skills = skills.is_dir() and any(
@@ -185,7 +257,6 @@ def _resolve_upstream(plugin_root: Path) -> Path | None:
             reverse=True,
         ):
             candidates.append(v)
-
     for c in candidates:
         if c.is_dir() and (c / "skills").is_dir():
             return c.resolve()
