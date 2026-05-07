@@ -13,18 +13,15 @@ QwenPaw port of the Claude Code [`production-grade`](https://github.com/nagisanz
 git clone https://github.com/nagisanzenin/qwenpaw-production-grade-plugin
 cd qwenpaw-production-grade-plugin
 
-# 2. make sure your upstream copy is around
-git clone https://github.com/nagisanzenin/claude-code-production-grade-plugin \
-  ~/Documents/Github/claude-code-production-grade-plugin
-
-# 3. install into QwenPaw
+# 2. install into QwenPaw
 qwenpaw plugin install . --force
 qwenpaw plugin list   # expect: production-grade
 
-# 4. restart QwenPaw and verify skills loaded
-# (Ctrl-C qwenpaw app, then run `qwenpaw app` again)
+# 3. restart QwenPaw (Ctrl-C qwenpaw app, then run it again)
 qwenpaw skills list
 ```
+
+If `skills/` and `protocols/` are committed in this repo (bundled), step 2 just works. If not (a fresh clone of the port repo without bundled output), the installer falls back to live-porting from your local upstream — see [`INSTALL.md`](./INSTALL.md) for the upstream-clone flow.
 
 Then in chat:
 
