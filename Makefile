@@ -55,6 +55,9 @@ clean:  ## remove pycache, dist, build, logs (does NOT touch skills/ or protocol
 runner-smoke:  ## load polymath runner, print system-prompt size; verifies bundled skills+protocols + acp SDK
 	python3 -m production_grade.specialists --role polymath --smoke
 
+hook-smoke:  ## verify P2 (auto-receipt) + P3 (skill preprocess) + P4 (session guard) hooks attach
+	python3 scripts/hook_smoke.py
+
 runner-list:  ## list ACP runners registered in default agent's agent.json
 	@python3 -c "import json,pathlib; p=pathlib.Path.home()/'.qwenpaw'/'workspaces'/'default'/'agent.json'; \
 	d=json.loads(p.read_text()) if p.exists() else {}; \

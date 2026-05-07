@@ -65,15 +65,56 @@ embeds the values in each runner's launch config.
 - LLM credential is shared across runners — a different model per
   specialist is not yet supported. v0.3+ will allow per-role overrides.
 
+### Added — v0.2 capability hooks (P2 + P3 + P4)
+
+`production_grade/hooks.py` ships three pieces, all installed by the
+plugin's startup hook and verified end-to-end in `/tmp/pg_hook_test.py`
+against the user's actual QwenPaw install:
+
+- **P2 — auto-receipt enforcement** (`post_acting` class hook on
+  `QwenPawAgent`). When the orchestrator finishes a
+  `delegate_external_agent` call to a `pgs-<role>-<copy>` runner, the
+  hook walks up from cwd to find a `Claude-Production-Grade-Suite/`
+  workspace and writes a stub receipt JSON under
+  `.orchestrator/receipts/<ts>-<role>-<short>.json` so the audit trail
+  survives even if the model forgets to write one. Orchestrator can
+  enrich the stub afterwards.
+- **P3 — runtime `!`<cmd>`` shell preprocessing** (monkey-patch on
+  `qwenpaw.app.runner.runner.AgentRunner._maybe_inject_skill`). After a
+  slash-skill invocation injects the skill body into the user message,
+  the wrapper scans for `!`<cmd>`` patterns and replaces each with the
+  command's stdout (10s timeout, errors collapsed into HTML comments
+  so the model still sees them). Restores cwd-sensitive protocol
+  loading the v0.1 port had to statify.
+- **P4 — `SessionStart` + `UserPromptSubmit` equivalents** (`pre_reply`
+  class hook). On the first prompt of each session, if cwd contains
+  `Claude-Production-Grade-Suite/`, prepend a recommendation pointing
+  at `/production-grade`. On every prompt, regex-match against
+  activation rules (build/audit/test/deploy patterns) and inject a
+  routing hint when one fires. Conservative — six rules total, no
+  matches on neutral prompts.
+
+All three are installed via a single `install_hooks(plugin_root)` call
+from `plugin._on_startup`. Re-installable; idempotent (won't
+double-register class hooks or double-patch the skill loader).
+
 ### Tracking — to reach 100% (per `plans/08_full_parity_architecture.md`)
 
-Done in this release: ACP runners (P0), orchestrator dispatch (P1).
+Done in this release:
+- P0 — Custom ACP runners (multi-agent + parallelism)
+- P1 — Orchestrator dispatch preamble
+- P2 — Auto-receipt enforcement
+- P3 — Runtime `!`<cmd>`` shell preprocessing
+- P4 — SessionStart + UserPromptSubmit class hooks
 
-Still ahead:
-- P2: AgentScope class hooks for auto-receipt enforcement (`pre_acting`/`post_acting`).
-- P3: Monkey-patch `_maybe_inject_skill` for runtime `!`<cmd>`` shell preprocessing.
-- P4: `SessionStart`/`UserPromptSubmit` class hooks for auto-routing.
-- (Deferred / UX) Frontend tool renderers, gate cards, task dashboard.
+Still deferred (UX-only, per user direction):
+- Frontend tool renderers (`registerToolRender` for AskUserQuestion / gate cards).
+- `registerRoutes` task dashboard sidebar.
+
+Net retention vs Claude Code production-grade: methodology content 100%,
+pipeline orchestration ~95% (no longer single-agent-walk), hook surface
+~90% (every event production-grade actually uses), UI primitives still
+~20% (text-only gate ceremonies). Weighted: ~85-90%.
 
 ---
 

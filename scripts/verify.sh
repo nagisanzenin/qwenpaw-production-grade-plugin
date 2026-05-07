@@ -120,6 +120,30 @@ else
 fi
 
 echo
+echo "=== v0.2-alpha: P2/P3/P4 hooks attached ==="
+hook_check=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+from production_grade.hooks import install_hooks, _INSTALLED
+from pathlib import Path
+install_hooks(plugin_root=Path('.').resolve())
+try:
+    from qwenpaw.agents.react_agent import QwenPawAgent
+    from qwenpaw.app.runner.runner import AgentRunner
+    pre_reply  = 'pg_session_guard_and_activation' in QwenPawAgent._class_pre_reply_hooks
+    post_acting = 'pg_auto_receipt' in QwenPawAgent._class_post_acting_hooks
+    skill_loader = bool(getattr(AgentRunner._maybe_inject_skill, '_pg_patched', False))
+    print(f'P2_ok={post_acting} P3_ok={skill_loader} P4_ok={pre_reply}')
+except Exception as e:
+    print(f'ERROR: {e}')
+" 2>&1)
+echo "  $hook_check"
+case "$hook_check" in
+  *P2_ok=True*P3_ok=True*P4_ok=True*) pass "P2 (auto-receipt) + P3 (skill preprocess) + P4 (session guard) all attached" ;;
+  *)                                   warn "one or more v0.2 hooks did not attach — see line above" ;;
+esac
+
+echo
 echo "=== summary ==="
 if [ "$fail" -gt 0 ]; then
   echo "  $fail FAIL, $warn warn"

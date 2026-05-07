@@ -74,6 +74,19 @@ class ProductionGradePlugin:
                 flush=True,
             )
 
+        # v0.2: install P2 (auto-receipt) + P3 (skill-loader patch) +
+        # P4 (session guard + activation rules) hooks.
+        try:
+            from production_grade.hooks import install_hooks
+
+            install_hooks(plugin_root=ROOT)
+        except Exception as exc:  # noqa: BLE001
+            log.error("hook install failed: %s\n%s", exc, traceback.format_exc())
+            print(
+                f"[production-grade] WARN hook install skipped: {exc}",
+                flush=True,
+            )
+
 
 # Required: a module-level `plugin` instance.
 plugin = ProductionGradePlugin()
