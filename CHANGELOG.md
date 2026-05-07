@@ -2,6 +2,81 @@
 
 All notable changes to the QwenPaw port of `production-grade`. Format follows [Keep a Changelog](https://keepachangelog.com); this project follows [Semantic Versioning](https://semver.org).
 
+## [v0.2.0-alpha] — 2026-05-07 (UNRELEASED, on `main`)
+
+The capability-first v0.2 release in progress. Closes the multi-agent and
+parallelism gaps documented in `plans/AUDIT_v0.1.1.md`. **Untagged.**
+Test on `main` first; tag `v0.2.0` once user-verified end-to-end.
+
+### Added — multi-agent infrastructure
+
+- **`production_grade/specialists/runner.py`** — minimal stdio ACP server.
+  Each specialist runs in a fresh subprocess with its role's SKILL.md +
+  the 8 shared protocols loaded as system prompt. No tool access in
+  v0.2-alpha — runner produces text (plans, specs, audits, reviews);
+  orchestrator implements via its own tools.
+- **`production_grade/specialists/__main__.py`** — CLI entry. Run any
+  specialist standalone for testing: `python -m production_grade.specialists --role polymath --smoke`.
+- **`production_grade/acp_install.py`** — registers `pgs-<role>-{a,b,c}`
+  runners in each workspace's `agent.json` so QwenPaw's
+  `delegate_external_agent` tool can spawn them. Suffixed copies
+  (3 for parallel-heavy roles, 2 for moderate, 1 for serial) work
+  around QwenPaw's per-`(session, runner)` re-entrancy constraint and
+  enable Wave A/B/C concurrent dispatch.
+- **`production_grade/v02_dispatch_preamble.md`** — injected into the
+  orchestrator's SKILL.md at install time. Tells the orchestrator how
+  to dispatch via `delegate_external_agent` instead of doing all work
+  itself, and lists the available runner names.
+
+### Added — operator support
+
+- `make runner-smoke` — load polymath runner and print system-prompt
+  size; verifies bundled skills+protocols and the `acp` SDK install.
+- `make runner-list` — list `pgs-*` runners registered in the default
+  agent.
+- `make dispatch-help` — print example `delegate_external_agent` call
+  for testing in chat.
+- `scripts/verify.sh` extended: checks count of `pgs-*` ACP runners
+  registered per workspace; warns if no LLM API key is set in env
+  (without one, runners fail at dispatch time).
+
+### Required env vars (passed through to spawned runners)
+
+For the runners to actually call out to an LLM, at least one of:
+
+- `OPENAI_API_KEY` (default provider)
+- `DASHSCOPE_API_KEY` (set `PG_LLM_PROVIDER=dashscope`)
+- `TOGETHER_API_KEY` (set `PG_LLM_PROVIDER=together`)
+
+Optional: `PG_LLM_MODEL`, `PG_LLM_BASE_URL`, `PG_LOG_FILE`.
+
+Set them in the shell that runs `qwenpaw app`, or in the QwenPaw
+secrets store. The plugin's startup hook reads them at install time and
+embeds the values in each runner's launch config.
+
+### Known limitations of v0.2-alpha
+
+- Runners are text-only. If a specialist's methodology says "now run
+  pytest" or "write file X", the orchestrator (you, the parent) must
+  perform the action. v0.3+ will route tool calls through ACP.
+- Parallelism is opportunistic — the orchestrator must explicitly fire
+  multiple delegations concurrently. The skill body's preamble
+  encourages this for Wave A/B/C phases but doesn't enforce it.
+- LLM credential is shared across runners — a different model per
+  specialist is not yet supported. v0.3+ will allow per-role overrides.
+
+### Tracking — to reach 100% (per `plans/08_full_parity_architecture.md`)
+
+Done in this release: ACP runners (P0), orchestrator dispatch (P1).
+
+Still ahead:
+- P2: AgentScope class hooks for auto-receipt enforcement (`pre_acting`/`post_acting`).
+- P3: Monkey-patch `_maybe_inject_skill` for runtime `!`<cmd>`` shell preprocessing.
+- P4: `SessionStart`/`UserPromptSubmit` class hooks for auto-routing.
+- (Deferred / UX) Frontend tool renderers, gate cards, task dashboard.
+
+---
+
 ## [v0.1.1] — 2026-05-07
 
 Unbreaks the v0.1.0 release and addresses every install-flow issue surfaced during the first end-to-end user run.

@@ -2,7 +2,9 @@
 
 QwenPaw port of the Claude Code [`production-grade`](https://github.com/nagisanzenin/claude-code-production-grade-plugin) plugin. **14 specialist skills + 8 shared protocols** turn QwenPaw from "writes code" into "delivers production-ready systems" — BRD, ADRs, tested code, security audit, CI/CD, runbook.
 
-**Status:** v0.1.1 — installable. Single-agent walk through the pipeline. Drop-in for QwenPaw `>=1.1.5`.
+**Status:**
+- **v0.1.1** — stable. Single-agent walk through the pipeline. Drop-in for QwenPaw `>=1.1.5`.
+- **v0.2.0-alpha** — on `main`, untagged. Adds multi-agent ACP runners + parallelism (closes the "raw capability" gap from `plans/AUDIT_v0.1.1.md`). Test before tagging.
 
 ---
 
@@ -36,6 +38,41 @@ Then in chat:
 You should see the orchestrator engage with `━━━ Production-Grade ━━━`-style headers, walk through DEFINE → BUILD → HARDEN phases, and produce real artifacts under `~/scratch/tasks-api/Claude-Production-Grade-Suite/`. Verification: `pytest -q` in the project should be green and the receipts dir should have one JSON per completed phase.
 
 ---
+
+## v0.2-alpha — extra setup (one-time)
+
+If you're trying the multi-agent path on `main`, you need at least one LLM API key in the shell that runs `qwenpaw app` so the spawned runner subprocesses can call out to a model:
+
+```bash
+export OPENAI_API_KEY='sk-...'                  # default provider
+# or:
+export PG_LLM_PROVIDER=dashscope
+export DASHSCOPE_API_KEY='sk-...'
+# or:
+export PG_LLM_PROVIDER=together
+export TOGETHER_API_KEY='...'
+
+# optional model override (otherwise sensible defaults per provider)
+export PG_LLM_MODEL='gpt-4o-mini'
+```
+
+Without a key set, runners die at dispatch time with `LLM call failed: missing key`. `make verify` warns if none are present.
+
+Smoke-test the runner standalone first (no dispatch, just confirm bundled skills+protocols load):
+
+```bash
+make runner-smoke
+# expects: role: polymath / system_prompt: ~25k chars / first 80 chars: '#-Production-Grade Specialist…'
+```
+
+Then in chat:
+
+```
+delegate_external_agent(action="start", runner="pgs-polymath-a",
+                        message="in 3 sentences, what trade-offs matter when choosing FastAPI vs Flask?")
+```
+
+If text streams back, the v0.2 dispatch path is functional and the orchestrator can use it.
 
 ## What's in here
 

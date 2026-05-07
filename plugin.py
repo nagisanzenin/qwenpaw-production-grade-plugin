@@ -56,6 +56,24 @@ class ProductionGradePlugin:
                 flush=True,
             )
 
+        # v0.2: register specialist ACP runners so the orchestrator can
+        # delegate to fresh subprocesses per role (real multi-agent +
+        # parallelism). Runs after skills install so SKILL.md files exist.
+        try:
+            from production_grade.acp_install import register_specialist_runners
+
+            n_runners = register_specialist_runners(plugin_root=ROOT)
+            print(
+                f"[production-grade] specialist runners registered in {n_runners} workspace(s)",
+                flush=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("ACP runner install failed: %s\n%s", exc, traceback.format_exc())
+            print(
+                f"[production-grade] WARN ACP runner install skipped: {exc}",
+                flush=True,
+            )
+
 
 # Required: a module-level `plugin` instance.
 plugin = ProductionGradePlugin()

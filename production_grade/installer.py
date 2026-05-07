@@ -133,6 +133,9 @@ def _install_into_workspace(
             text = text.replace("${PG_PROTOCOLS}", str(dst_protocols))
         else:
             text = adapt_skill(text, protocols_dir=dst_protocols)
+        # v0.2: inject specialist-dispatch preamble into the orchestrator only.
+        if src_dir.name == "production-grade":
+            text = _inject_v02_preamble(text)
         (dst_dir / "SKILL.md").write_text(text, encoding="utf-8")
         installed_metadata[src_dir.name] = _extract_skill_metadata(text)
 
@@ -143,6 +146,41 @@ def _install_into_workspace(
         f"[production-grade]   ✓ {workspace.name}: {len(installed_metadata)} skills",
         flush=True,
     )
+
+
+# ─── v0.2 dispatch preamble (orchestrator only) ────────────────────────────
+
+_PREAMBLE_MARKER = "v0.2 — Specialist Dispatch Protocol"
+_PREAMBLE_FILE = Path(__file__).resolve().parent / "v02_dispatch_preamble.md"
+
+
+def _inject_v02_preamble(skill_text: str) -> str:
+    """Insert the v0.2 dispatch preamble after the YAML frontmatter close.
+
+    Idempotent — if the preamble's marker is already present in the body,
+    the original text is returned unchanged. This means re-running
+    ``make install`` won't double-inject after the orchestrator's body
+    already has it.
+    """
+    if not _PREAMBLE_FILE.is_file():
+        log.warning("v0.2 preamble file missing at %s — orchestrator unchanged",
+                    _PREAMBLE_FILE)
+        return skill_text
+    if _PREAMBLE_MARKER in skill_text:
+        return skill_text  # already injected
+
+    preamble = _PREAMBLE_FILE.read_text(encoding="utf-8").rstrip() + "\n\n"
+
+    lines = skill_text.splitlines(keepends=True)
+    if lines and lines[0].strip() == "---":
+        # Find the closing fence of YAML frontmatter.
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                head = "".join(lines[: i + 1])
+                tail = "".join(lines[i + 1:])
+                return head + "\n" + preamble + tail.lstrip("\n")
+    # No frontmatter — just prepend.
+    return preamble + skill_text
 
 
 # ─── Skill manifest registration ────────────────────────────────────────────

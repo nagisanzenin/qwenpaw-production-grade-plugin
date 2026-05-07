@@ -90,6 +90,36 @@ sys.stdout.write(str(14 - len(missing)))
 fi
 
 echo
+echo "=== v0.2-alpha: specialist ACP runners ==="
+expected_runners=29  # 14 roles, several with multiple suffixed copies
+for ws in "$ws_root"/*/; do
+  [ -d "$ws" ] || continue
+  name=$(basename "$ws")
+  if [ -f "${ws}agent.json" ]; then
+    n_pgs=$(python3 -c "
+import json
+d=json.load(open('${ws}agent.json'))
+acp=(d.get('acp') or {}).get('agents') or {}
+print(sum(1 for k in acp if k.startswith('pgs-') and acp[k].get('enabled')))
+" 2>/dev/null || echo 0)
+    if [ "$n_pgs" -ge "$expected_runners" ]; then
+      pass "$name: $n_pgs pgs-* ACP runners registered (≥$expected_runners required)"
+    elif [ "$n_pgs" -gt 0 ]; then
+      warn "$name: only $n_pgs pgs-* ACP runners (expected ≥$expected_runners) — restart \`qwenpaw app\`"
+    else
+      warn "$name: 0 pgs-* ACP runners — v0.2 dispatch unavailable (run on v0.1.1, or hook crashed)"
+    fi
+  fi
+done
+
+# LLM credential sanity (one of these must be set for runners to actually call out)
+if [ -n "${OPENAI_API_KEY:-}${DASHSCOPE_API_KEY:-}${TOGETHER_API_KEY:-}${ANTHROPIC_API_KEY:-}" ]; then
+  pass "at least one LLM API key in env (runners can call out)"
+else
+  warn "no OPENAI/DASHSCOPE/TOGETHER/ANTHROPIC_API_KEY in env — runners will fail when dispatched"
+fi
+
+echo
 echo "=== summary ==="
 if [ "$fail" -gt 0 ]; then
   echo "  $fail FAIL, $warn warn"
