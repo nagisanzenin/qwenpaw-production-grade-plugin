@@ -10,15 +10,16 @@ specs, audits, etc. as text. Tools (read_file/write_file/execute_shell) stay
 on the orchestrator side. v0.3+ will add ACP tool-call routing so specialists
 can request tool execution from the parent.
 
-LLM provider is selected via environment variables, populated by the parent
-QwenPaw process when it spawns the runner:
+LLM provider is selected via env vars populated by the parent QwenPaw
+process when it spawns the runner:
 
-- ``PG_LLM_PROVIDER``  ``openai`` (default) | ``dashscope``
-- ``PG_LLM_MODEL``     model id (default: gpt-4o-mini for openai,
-                       qwen-max-latest for dashscope)
-- ``PG_LLM_BASE_URL``  optional override for OpenAI-compatible endpoints
-- ``OPENAI_API_KEY`` / ``DASHSCOPE_API_KEY``  the credential
-- ``PG_LOG_FILE``      optional log path for runner-side diagnostics
+- ``OPENAI_API_KEY``  the credential
+- ``OPENAI_BASE_URL`` (optional) endpoint override (Together, custom gateway, etc)
+- ``PG_LLM_MODEL``    model id (no default — the installer reads the agent's
+                      active model and injects it)
+- ``PG_LLM_PROVIDER`` ``openai`` (default — used for OpenAI-compatible
+                      endpoints) | ``dashscope`` | ``together``
+- ``PG_LOG_FILE``     optional log path for runner-side diagnostics
 """
 from __future__ import annotations
 
@@ -26,20 +27,34 @@ import logging
 import os
 import sys
 import traceback
-import uuid
 from pathlib import Path
 from typing import AsyncIterator
+from uuid import uuid4
 
-# ACP SDK is shipped by QwenPaw as `agent-client-protocol>=0.9.0`.
+# ACP SDK shipped with QwenPaw as ``agent-client-protocol``. The package
+# layout we care about:
+#   acp.Agent              — Protocol class to implement
+#   acp.run_agent          — stdio entry point
+#   acp.update_agent_message, acp.text_block — chunk helpers
+#   acp.interfaces.Client  — connection type passed via on_connect
+#   acp.schema.*           — concrete dataclasses (Pydantic v2)
 try:
-    from acp import Agent
     from acp import (
-        AgentCapabilities,
+        Agent,
+        InitializeResponse,
         NewSessionResponse,
         PromptResponse,
+        run_agent,
+        text_block,
+        update_agent_message,
     )
-    from acp.runtime import run_agent
-    from acp.updates import update_agent_message, text_block
+    from acp.interfaces import Client
+    from acp.schema import (
+        AgentCapabilities,
+        Implementation,
+        SessionCapabilities,
+        SessionCloseCapabilities,
+    )
 except Exception as exc:  # noqa: BLE001
     sys.stderr.write(
         f"[pg-runner] failed to import acp SDK: {exc}\n"
@@ -58,6 +73,8 @@ PROTOCOL_FILES = (
     "boundary-safety.md",
     "conflict-resolution.md",
 )
+
+PROTOCOL_VERSION = 1
 
 
 def _setup_logging() -> logging.Logger:
@@ -81,14 +98,20 @@ def _setup_logging() -> logging.Logger:
 
 
 class SpecialistACPAgent(Agent):  # type: ignore[misc]
-    """ACP Agent that wraps one role's SKILL.md as system prompt."""
+    """ACP Agent that wraps one role's SKILL.md as system prompt.
+
+    Subclasses ``acp.Agent`` (a Protocol). The ACP runtime calls
+    :meth:`on_connect` once with the live ``Client`` so we can stream
+    ``session_update`` notifications back to the orchestrator.
+    """
 
     def __init__(self, *, role: str, copy: str, plugin_root: Path) -> None:
-        super().__init__()
         self.role = role
         self.copy = copy
         self.plugin_root = plugin_root
         self.log = _setup_logging()
+        self._conn: Client | None = None
+        self._sessions: dict[str, dict] = {}
         self.system_prompt = self._build_system_prompt()
         self.log.info(
             "specialist=%s copy=%s plugin_root=%s system_prompt_chars=%d",
@@ -97,29 +120,66 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
 
     # -- ACP lifecycle -------------------------------------------------------
 
-    async def initialize(self, params):  # type: ignore[no-untyped-def]
-        return AgentCapabilities(
-            load_session=False,
-            session_capabilities={"prompts": True, "tools": False},
+    def on_connect(self, conn: Client) -> None:
+        self._conn = conn
+
+    async def initialize(  # noqa: D401
+        self,
+        protocol_version: int,
+        client_capabilities=None,  # noqa: ARG002
+        client_info=None,  # noqa: ARG002
+        **_kwargs,
+    ) -> InitializeResponse:
+        self.log.info("initialize: protocol_version=%d", protocol_version)
+        return InitializeResponse(
+            protocol_version=protocol_version,
+            agent_capabilities=AgentCapabilities(
+                load_session=False,
+                session_capabilities=SessionCapabilities(
+                    close=SessionCloseCapabilities(),
+                ),
+            ),
+            agent_info=Implementation(
+                name=f"pgs-{self.role}",
+                title=f"production-grade specialist · {self.role}",
+                version="0.2.0-alpha",
+            ),
         )
 
-    async def new_session(self, params):  # type: ignore[no-untyped-def]
-        sid = str(uuid.uuid4())
-        self.log.info("new_session session_id=%s", sid)
-        return NewSessionResponse(session_id=sid, config_options=[])
+    async def new_session(
+        self,
+        cwd: str,
+        mcp_servers=None,  # noqa: ARG002
+        **_kwargs,
+    ) -> NewSessionResponse:
+        sid = uuid4().hex
+        self._sessions[sid] = {"cwd": cwd}
+        self.log.info("new_session: id=%s cwd=%s", sid, cwd)
+        return NewSessionResponse(session_id=sid)
 
-    async def prompt(self, params):  # type: ignore[no-untyped-def]
-        user_text = self._extract_user_text(getattr(params, "prompt", None))
+    async def prompt(
+        self,
+        prompt,
+        session_id: str,
+        message_id: str | None = None,  # noqa: ARG002
+        **_kwargs,
+    ) -> PromptResponse:
+        if self._conn is None:
+            self.log.error("prompt called with no _conn attached")
+            return PromptResponse(stop_reason="refusal")
+
+        user_text = self._extract_user_text(prompt)
         self.log.info(
             "prompt session=%s len=%d preview=%r",
-            getattr(params, "session_id", "?"), len(user_text), user_text[:120],
+            session_id, len(user_text), user_text[:120],
         )
+
         try:
             async for delta in self._stream_llm(user_text):
                 if not delta:
                     continue
-                await self._conn.session_update(  # type: ignore[attr-defined]
-                    session_id=params.session_id,
+                await self._conn.session_update(
+                    session_id=session_id,
                     update=update_agent_message(text_block(delta)),
                 )
             return PromptResponse(stop_reason="end_turn")
@@ -127,38 +187,56 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
             tb = traceback.format_exc()
             self.log.error("prompt failed: %s\n%s", exc, tb)
             err = (
-                f"[pg-runner role={self.role}] LLM call failed: {type(exc).__name__}: {exc}\n"
-                "Check OPENAI_API_KEY / PG_LLM_PROVIDER / PG_LLM_MODEL.\n"
+                f"[pg-runner role={self.role}] LLM call failed: "
+                f"{type(exc).__name__}: {exc}\n"
+                "Check OPENAI_API_KEY / OPENAI_BASE_URL / PG_LLM_MODEL.\n"
             )
             try:
-                await self._conn.session_update(  # type: ignore[attr-defined]
-                    session_id=params.session_id,
+                await self._conn.session_update(
+                    session_id=session_id,
                     update=update_agent_message(text_block(err)),
                 )
             except Exception:  # noqa: BLE001
                 pass
-            return PromptResponse(stop_reason="error")
+            return PromptResponse(stop_reason="refusal")
 
-    # -- Helpers -------------------------------------------------------------
+    async def cancel(self, session_id: str, **_kwargs) -> None:
+        self.log.info("cancel: session=%s", session_id)
+
+    # -- System prompt assembly ---------------------------------------------
 
     def _build_system_prompt(self) -> str:
-        skill_md = (self.plugin_root / "skills" / self.role / "SKILL.md").read_text(encoding="utf-8")
+        skill_md = (
+            self.plugin_root / "skills" / self.role / "SKILL.md"
+        ).read_text(encoding="utf-8")
         protocols_dir = self.plugin_root / "protocols"
         protocol_chunks: list[str] = []
         for fname in PROTOCOL_FILES:
             p = protocols_dir / fname
             if p.is_file():
-                protocol_chunks.append(f"## {fname}\n\n{p.read_text(encoding='utf-8')}")
-        protocols_block = "\n\n".join(protocol_chunks) if protocol_chunks else "(no protocols loaded)"
+                protocol_chunks.append(
+                    f"## {fname}\n\n{p.read_text(encoding='utf-8')}"
+                )
+        protocols_block = (
+            "\n\n".join(protocol_chunks)
+            if protocol_chunks
+            else "(no protocols loaded)"
+        )
         return (
             "# Production-Grade Specialist (ACP runner)\n\n"
-            f"You are running as the **{self.role}** specialist in a fresh subprocess.\n"
-            "You receive ONE prompt from the orchestrator describing the work for this turn.\n"
-            "Produce a focused response that fulfills the role's methodology — analyses, plans,\n"
+            f"You are running as the **{self.role}** specialist in a fresh "
+            "subprocess.\n"
+            "You receive ONE prompt from the orchestrator describing the work "
+            "for this turn.\n"
+            "Produce a focused response that fulfills the role's methodology — "
+            "analyses, plans,\n"
             "specs, reviews, audits, threat models, etc. — as plain text.\n\n"
-            "v0.2-alpha note: you do NOT have tool access. If your methodology says to "
-            "execute or write files, describe what to execute/write in clear terms; the "
-            "orchestrator (parent) will perform the action and may dispatch back to you.\n\n"
+            "v0.2-alpha note: you do NOT have tool access. If your methodology "
+            "says to\n"
+            "execute or write files, describe what to execute/write in clear "
+            "terms; the\n"
+            "orchestrator (parent) will perform the action and may dispatch "
+            "back to you.\n\n"
             "## Shared Protocols\n\n"
             f"{protocols_block}\n\n"
             f"## Role Definition: {self.role}\n\n"
@@ -169,7 +247,6 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
     def _extract_user_text(prompt) -> str:
         if not prompt:
             return ""
-        # ACP prompt content is typically a list of typed content blocks.
         if isinstance(prompt, str):
             return prompt
         out_parts: list[str] = []
@@ -178,15 +255,16 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
             if t is not None:
                 out_parts.append(t)
                 continue
-            if isinstance(blk, dict):
-                if "text" in blk:
-                    out_parts.append(str(blk["text"]))
+            if isinstance(blk, dict) and "text" in blk:
+                out_parts.append(str(blk["text"]))
         return "".join(out_parts)
 
     async def _stream_llm(self, user_text: str) -> AsyncIterator[str]:
         provider = os.environ.get("PG_LLM_PROVIDER", "openai").lower()
-        model = os.environ.get("PG_LLM_MODEL", _default_model(provider))
-        base_url = os.environ.get("PG_LLM_BASE_URL") or _default_base_url(provider)
+        model = os.environ.get("PG_LLM_MODEL") or _default_model(provider)
+        base_url = os.environ.get("PG_LLM_BASE_URL") or os.environ.get(
+            "OPENAI_BASE_URL"
+        ) or _default_base_url(provider)
         api_key = _resolve_api_key(provider)
 
         try:
@@ -195,10 +273,16 @@ class SpecialistACPAgent(Agent):  # type: ignore[misc]
             yield f"[pg-runner] missing openai SDK; pip install openai. ({exc})"
             return
 
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url) if base_url \
+        client = (
+            AsyncOpenAI(api_key=api_key, base_url=base_url)
+            if base_url
             else AsyncOpenAI(api_key=api_key)
+        )
 
-        self.log.info("llm provider=%s model=%s base_url=%s", provider, model, base_url or "(default)")
+        self.log.info(
+            "llm provider=%s model=%s base_url=%s",
+            provider, model, base_url or "(default)",
+        )
         stream = await client.chat.completions.create(
             model=model,
             messages=[
