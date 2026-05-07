@@ -85,8 +85,10 @@ def _setup_logging() -> logging.Logger:
         h: logging.Handler = logging.FileHandler(log_file, encoding="utf-8")
     else:
         h = logging.StreamHandler(sys.stderr)
+    # Include PID so concurrent copies of the same role sharing a log file
+    # remain distinguishable.
     h.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        "%(asctime)s [pid=%(process)d] [%(levelname)s] [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
     ))
     log.addHandler(h)

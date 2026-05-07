@@ -2,11 +2,65 @@
 
 All notable changes to the QwenPaw port of `production-grade`. Format follows [Keep a Changelog](https://keepachangelog.com); this project follows [Semantic Versioning](https://semver.org).
 
-## [v0.2.0-alpha] — 2026-05-07 (UNRELEASED, on `main`)
+## [v0.2.0] — 2026-05-07
 
-The capability-first v0.2 release in progress. Closes the multi-agent and
-parallelism gaps documented in `plans/AUDIT_v0.1.1.md`. **Untagged.**
-Test on `main` first; tag `v0.2.0` once user-verified end-to-end.
+User-experience pass on top of `v0.2.0-alpha`. Closes the four silent-failure
+modes that surfaced during the alpha test session and ships the loud
+diagnostics infrastructure that would have caught all of them on the first
+restart.
+
+### Added — observability for end-users
+
+- **Loud startup banner** — `plugin.py._on_startup` prints
+  `[production-grade] v<X.Y.Z> starting (plugin root: ...)` so users always
+  know which version is loaded and from where. Followed by ✓/WARN lines for
+  each subsystem (skills, ACP runners, P2/P3/P4 hooks).
+- **Stale-snapshot detector** — when `make install` runs, it drops a
+  `.dev_source` marker in the snapshot pointing back at the source repo.
+  At every `qwenpaw app` startup, plugin.py compares source-repo `.py`
+  mtimes vs the snapshot's. If source is newer by >5s, prints a loud
+  ⚠ block telling the user to re-run `make install`. End-users who
+  installed via `qwenpaw plugin install <git-url>` don't have the marker
+  so don't see the warning — intentional. Catches the alpha-session bug
+  where 4+ hours of edits sat invisible because qwenpaw was running a
+  pre-v0.2 snapshot.
+- **Auto per-role runner logs** — every `pgs-*` runner now defaults
+  `PG_LOG_FILE=~/.qwenpaw/logs/pg-runner-<role>.log`. PID is included on
+  every line so concurrent copies (Wave-A/B/C parallelism) remain
+  distinguishable. Users no longer need to opt in to debug logs; the
+  trail is always there when something goes wrong.
+
+### Added — developer iteration loop
+
+- **`make dev`** — single command for the edit→reinstall cycle:
+  `qwenpaw shutdown` → `make install` → reminder to start `qwenpaw app`.
+  Replaces the 3-step manual dance.
+- **`scripts/verify.sh` runner count fixed** — 29 → 22, matching the
+  actual `COPIES_PER_ROLE` registry (1+1+1+3+3+3+2+2+2+1+1+1+1).
+
+### Fixed — runner spawn under arbitrary cwd
+
+- **`acp_install.py` — set `PYTHONPATH` in runner env.** When QwenPaw spawns
+  a `pgs-<role>-<copy>` runner, it inherits the user's chat-workspace cwd
+  (e.g. `~/scratch/<project>/`). With no `PYTHONPATH`, `python -m
+  production_grade.specialists` could not locate the package — the
+  subprocess died on import in <50ms. The parent `delegate_external_agent`
+  call then hung waiting for an `initialize` response that would never
+  arrive, manifesting in chat as the dreaded "preset max runtime"
+  timeout. Fix: prepend `plugin_root` to `PYTHONPATH` in `_runner_env()`.
+
+### Fixed — specialist conversation memory
+
+- **`specialists/runner.py` — per-session message history.** When the
+  orchestrator dispatched `action="message"` follow-ups, the runner was
+  sending only `[system, current_user_text]` to the LLM each turn,
+  dropping every prior turn. The follow-up "Please proceed now" landed
+  with zero context, the LLM returned an empty completion, and the
+  orchestrator concluded specialists "weren't producing as expected."
+  Fix: `new_session` seeds `session["history"] = []`, `prompt()` appends
+  `{role:user}` then `{role:assistant}` per turn, and `_stream_llm` sends
+  `[system, *history]`. Empty completions now surface a diagnostic
+  warning instead of silent `end_turn`.
 
 ### Added — multi-agent infrastructure
 

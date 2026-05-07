@@ -116,11 +116,20 @@ def register_specialist_runners(plugin_root: Path) -> int:
                     "--copy", suffix,
                     "--plugin-root", str(plugin_root),
                 ]
+                # Per-role log file — concurrent copies of the same role
+                # share, but pid in each line distinguishes them. Default-on
+                # so debugging never depends on users remembering to set env.
+                runner_env = {
+                    **ws_env,
+                    "PG_LOG_FILE": str(
+                        Path(ws_env["PG_LOG_DIR"]) / f"pg-runner-{role}.log"
+                    ),
+                }
                 cfg.acp.agents[key] = ACPAgentConfig(
                     enabled=True,
                     command=cmd,
                     args=runner_args,
-                    env={**ws_env},
+                    env=runner_env,
                     trusted=True,
                     tool_parse_mode="update_detail",
                     stdio_buffer_limit_bytes=50 * 1024 * 1024,
@@ -172,11 +181,20 @@ def _runner_env(plugin_root: Path, *, agent_id: str, agent_cfg) -> dict[str, str
     pythonpath = (
         f"{plugin_root}{os.pathsep}{existing_pp}" if existing_pp else str(plugin_root)
     )
+
+    # Default log dir so every runner has a debug trail without users opting in.
+    # Per-role files (not per-copy) keep the dir manageable; concurrent copies
+    # of the same role share a file but tag each line with their PID.
+    log_dir = Path.home() / ".qwenpaw" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     env: dict[str, str] = {
         "PG_ROOT": str(plugin_root),
         "PYTHONPATH": pythonpath,
         # Belt-and-suspenders for stdio buffering (also -u in args).
         "PYTHONUNBUFFERED": "1",
+        # Default-on debug logging — overridable per-runner below.
+        "PG_LOG_DIR": str(log_dir),
     }
 
     # 1. Resolve from active provider via QwenPaw's secret store.

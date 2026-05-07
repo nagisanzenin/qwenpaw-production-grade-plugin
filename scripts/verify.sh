@@ -91,7 +91,11 @@ fi
 
 echo
 echo "=== v0.2-alpha: specialist ACP runners ==="
-expected_runners=29  # 14 roles, several with multiple suffixed copies
+# 22 = polymath(1) + product-manager(1) + solution-architect(1) +
+#      software-engineer(3) + frontend-engineer(3) + qa-engineer(3) +
+#      security-engineer(2) + code-reviewer(2) + devops(2) +
+#      sre(1) + technical-writer(1) + data-scientist(1) + skill-maker(1)
+expected_runners=22
 for ws in "$ws_root"/*/; do
   [ -d "$ws" ] || continue
   name=$(basename "$ws")

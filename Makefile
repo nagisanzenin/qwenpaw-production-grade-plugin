@@ -4,7 +4,7 @@
 # Run `make help` to see what's available.
 
 .DEFAULT_GOAL := help
-.PHONY: help install verify port port-clean upstream-pull update uninstall clean \
+.PHONY: help install dev verify port port-clean upstream-pull update uninstall clean \
         runner-smoke runner-list dispatch-help
 
 UPSTREAM ?= $(HOME)/Documents/Github/claude-code-production-grade-plugin
@@ -14,10 +14,24 @@ help:  ## show this list
 
 install:  ## install or reinstall the plugin into QwenPaw, then print verification reminder
 	qwenpaw plugin install . --force
+	@# Drop a marker so the snapshot's plugin.py knows where the source is and
+	@# can warn at startup if source has drifted ahead of the snapshot.
+	@SNAP="$$HOME/.qwenpaw/plugins/production-grade"; \
+	  if [ -d "$$SNAP" ]; then \
+	    pwd > "$$SNAP/.dev_source"; \
+	    echo "  ✓ wrote $$SNAP/.dev_source pointing at $$(pwd)"; \
+	  fi
 	qwenpaw plugin list | grep -E '^(production-grade|✓.*production-grade)' || true
 	@echo
 	@echo "Now restart 'qwenpaw app' (Ctrl-C then run again) so the startup hook fires."
 	@echo "After restart: make verify"
+
+dev:  ## developer iteration loop: shutdown → reinstall → remind to restart
+	@echo "→ shutting down qwenpaw..."
+	-qwenpaw shutdown 2>/dev/null
+	@$(MAKE) install
+	@echo
+	@echo "→ Now run 'qwenpaw app' in your usual terminal to pick up the new code."
 
 verify:  ## sanity-check the install end-to-end
 	@bash scripts/verify.sh
